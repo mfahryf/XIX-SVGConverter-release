@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+  <name>Curve Input</name>
+  <id>org.inkscape.input.curve_input</id>
+  <input>
+    <extension>.curve</extension>
+    <mimetype>application/x-extension-curve</mimetype>
+    <filetypename>Linearity Curve file (*.curve)</filetypename>
+    <filetypetooltip>Import a Linearity Curve file</filetypetooltip>
+  </input>
+  <script>
+    <command location="inx" interpreter="python">inkvn</command>
+  </script>
+</inkscape-extension>
