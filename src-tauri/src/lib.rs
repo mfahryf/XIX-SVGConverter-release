@@ -2,13 +2,15 @@ pub mod batch;
 pub mod config;
 pub mod engines;
 pub mod img;
+pub mod licensing;
 pub mod net;
 pub mod secure;
 pub mod svg;
 
-use crate::batch::run_batch;
+use crate::batch::{run_batch, BatchEvent};
 use crate::config::{load as config_load, save as config_save, AppConfig};
 use crate::engines::{common_batch_options, EngineOptions, OptionDef};
+use crate::licensing::{AccessDecision, LicenseStatus, LicensingState};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -172,6 +174,7 @@ async fn start_batch(
     engine_id: String,
     options: EngineOptions,
     state: State<'_, BatchState>,
+    licensing: State<'_, LicensingState>,
 ) -> Result<(), String> {
     let batch_start = state.begin_start();
     // Validasi dulu secara eager agar id tak dikenal ditolak lewat path
@@ -179,6 +182,8 @@ async fn start_batch(
     if !engines::registry().iter().any(|e| e.id() == engine_id) {
         return Err(format!("engine not found: {engine_id}"));
     }
+    let decision = licensing.manager.preflight(&engine_id, 1).await.map_err(|error| error.to_string())?;
+    ensure_batch_allowed(&decision)?;
     // Satu engine per worker dibangun dari registry yang sama; engine
     // stateless berbagi perilaku, state rotator tidak balapan antar worker.
     let engine_id_cl = engine_id.clone();
@@ -199,6 +204,8 @@ async fn start_batch(
     let (cancel, pause) = batch_start.into_controls(&state)?;
     let total = files.len();
     let emit_app = app.clone();
+    let usage_manager = licensing.manager.clone();
+    let usage_engine_id = engine_id.clone();
     tauri::async_runtime::spawn(async move {
         let (ok, fail) = run_batch(
             make_engines,
@@ -208,6 +215,18 @@ async fn start_batch(
             cancel,
             pause,
             move |ev| {
+                if let BatchEvent::FileDone { input, output, usage_event_id, .. } = &ev {
+                    if let Err(error) = usage_manager.record_success_with_event_id(
+                        &usage_engine_id,
+                        Path::new(input),
+                        Path::new(output),
+                        usage_event_id,
+                    ) {
+                        eprintln!("LICENSE USAGE ERROR: {error}");
+                    }
+                    let sync_manager = usage_manager.clone();
+                    tauri::async_runtime::spawn(async move { let _ = sync_manager.sync_pending_usage().await; });
+                }
                 let _ = emit_app.emit("batch://event", ev);
             },
         )
@@ -219,6 +238,28 @@ async fn start_batch(
     });
     Ok(())
 }
+
+fn ensure_batch_allowed(decision: &AccessDecision) -> Result<(), String> {
+    if decision.allowed { Ok(()) } else { Err(decision.message.clone()) }
+}
+
+#[tauri::command]
+async fn license_status(state: State<'_, LicensingState>) -> Result<LicenseStatus, String> { state.manager.status().await.map_err(|error| error.to_string()) }
+
+#[tauri::command]
+async fn license_purchase_url(state: State<'_, LicensingState>) -> Result<String, String> { state.manager.checkout_url().await.map_err(|error| error.to_string()) }
+
+#[tauri::command]
+async fn activate_license(state: State<'_, LicensingState>, license_key: String) -> Result<LicenseStatus, String> { state.manager.activate(license_key).await.map_err(|error| error.to_string()) }
+
+#[tauri::command]
+async fn refresh_license(state: State<'_, LicensingState>) -> Result<LicenseStatus, String> { state.manager.refresh().await.map_err(|error| error.to_string()) }
+
+#[tauri::command]
+async fn license_preflight(state: State<'_, LicensingState>, engine_id: String, requested_files: usize) -> Result<AccessDecision, String> { state.manager.preflight(&engine_id, requested_files).await.map_err(|error| error.to_string()) }
+
+#[tauri::command]
+async fn license_sync_usage(state: State<'_, LicensingState>) -> Result<(), String> { state.manager.sync_pending_usage().await.map_err(|error| error.to_string()) }
 
 #[tauri::command]
 fn stat_files(files: Vec<String>) -> Vec<u64> {
@@ -272,6 +313,9 @@ fn save_config(app: AppHandle, cfg: AppConfig) -> Result<(), String> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // Point the SVG Converter engine at the bundled portable Inkscape
             // (resource dir in release; repo dir in dev when present).
@@ -292,6 +336,9 @@ pub fn run() {
             .find(|p| p.exists());
             crate::engines::svg_converter::set_bundled_inkscape(exe);
 
+            let app_data_dir = app.path().app_data_dir()
+                .map_err(|error| format!("cannot resolve licensing data directory: {error}"))?;
+            app.manage(LicensingState::new(&app_data_dir).map_err(|error| error.to_string())?);
             Ok(())
         })
         .manage(BatchState::default())
@@ -304,7 +351,13 @@ pub fn run() {
             pause_batch,
             open_dir,
             get_config,
-            save_config
+            save_config,
+            license_status,
+            license_purchase_url,
+            activate_license,
+            refresh_license,
+            license_preflight,
+            license_sync_usage
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
