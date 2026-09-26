@@ -193,7 +193,7 @@ function setBgFx(mode, persist = true) {
   document.body.classList.remove(...FX_MODES.map((f) => "fx-" + f.id));
   document.body.classList.add("fx-" + fx.id);
   const btn = $("btn-bg-fx");
-  btn.title = `Efek latar: ${fx.label.toLowerCase()} — klik untuk ganti`;
+  btn.title = `Background effect: ${fx.label.toLowerCase()} — click to change`;
   btn.querySelector(".fx-name").textContent = fx.label;
   if (persist) saveConfig();
 }
@@ -493,7 +493,7 @@ function renderPlaylist(files) {
   const ul = $("pl-list");
   ul.innerHTML = "";
   state.files = files;
-  $("pl-count").textContent = `${files.length} file`;
+  $("pl-count").textContent = `${files.length} file${files.length === 1 ? "" : "s"}`;
   // total LCD langsung = jumlah file di playlist (0/total)
   updateCount(0, files.length);
   updateErrCount(0);
@@ -577,7 +577,7 @@ function updateErrCount(n) {
 function clearPlaylist() {
   $("pl-list").innerHTML = "";
   state.files = [];
-  $("pl-count").textContent = "0 file";
+  $("pl-count").textContent = "0 files";
   updateCount(0, 0);
   updateErrCount(0);
   setSeek(0);
@@ -597,7 +597,7 @@ function clearFinished() {
     if (doneNames.has(li.dataset.name)) li.remove();
   }
   state.files = state.files.filter((f) => !doneNames.has(f.name));
-  $("pl-count").textContent = `${state.files.length} file`;
+  $("pl-count").textContent = `${state.files.length} file${state.files.length === 1 ? "" : "s"}`;
   // total = sisa (failed + belum diproses); angka baris tetap (tidak reset ke 1)
   updateCount(0, state.files.length);
   updateErrCount(0);
@@ -609,7 +609,7 @@ function toggleClearMenu() {
   document.querySelectorAll(".dd-list:not(.hidden)").forEach((l) => l.classList.add("hidden"));
   if (opening) {
     const n = [...$("pl-list").children].filter((li) => li.classList.contains("done")).length;
-    $("cm-done").textContent = n ? `Hapus yang berhasil (${n})` : "Hapus yang berhasil";
+    $("cm-done").textContent = n ? `Clear successful (${n})` : "Clear successful";
     menu.classList.remove("hidden");
     document.addEventListener("mousedown", clearMenuOutside);
   } else {
@@ -628,7 +628,7 @@ async function start() {
   if (state.running) return;
   const output = $("cfg-output").value.trim();
   if (!state.files.length || !output) {
-    setStatus("PILIH FILE / FOLDER INPUT & ISI OUTPUT", true);
+    setStatus("SELECT INPUT FILES / FOLDER AND SET OUTPUT", true);
     setLcd("READY");
     return;
   }
@@ -811,12 +811,12 @@ listen("batch://event", (e) => {
 });
 listen("batch://done", (e) => {
   const { ok, fail, total } = e.payload;
-  setLcd("SELESAI");
-  stopBatchUI(`selesai ${ok} · gagal ${fail} / ${total}`, fail > 0);
+  setLcd("FINISHED");
+  stopBatchUI(`finished ${ok} · failed ${fail} / ${total}`, fail > 0);
   updateCount(total, total);
   setSeek(100);
   const st = $("pl-status");
-  st.textContent = fail > 0 ? `SELESAI (${fail} GAGAL)` : "DONE";
+  st.textContent = fail > 0 ? `FINISHED (${fail} FAILED)` : "DONE";
   st.className = fail > 0 ? "err" : "ok";
   saveConfig();
 });
